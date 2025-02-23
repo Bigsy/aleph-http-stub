@@ -87,6 +87,32 @@
            (deliver p :done))))
       @p)))
 
+(deftest test-http-methods
+  (testing "Various HTTP methods"
+    (let [p (promise)]
+      (with-http-stub
+        {"http://example.com"
+         {:put (fn [req] {:status 200 :body "Updated"})
+          :delete (fn [req] {:status 204})
+          :patch (fn [req] {:status 200 :body "Partially updated"})}}
+        
+        (d/chain
+         (d/zip
+          (http/put "http://example.com" {:body "update data"})
+          (http/delete "http://example.com")
+          (http/request {:request-method :patch
+                        :url "http://example.com"
+                        :body "patch data"}))
+         (fn [[put-resp delete-resp patch-resp]]
+           (is (= 200 (:status put-resp)))
+           (is (= "Updated" (bs/to-string (:body put-resp))))
+           (is (= 204 (:status delete-resp)))
+           (is (nil? (:body delete-resp)))
+           (is (= 200 (:status patch-resp)))
+           (is (= "Partially updated" (bs/to-string (:body patch-resp))))
+           (deliver p :done))))
+      @p)))
+
 (deftest test-http-stub-in-isolation
   (testing "throws exception for unmatched routes in isolation mode"
     (let [p (promise)]

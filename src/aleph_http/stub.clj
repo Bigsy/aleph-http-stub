@@ -78,12 +78,9 @@
   (let [normalized-request (normalize-request request)
         request-url (str (:url normalized-request))
         request-method (or (:request-method normalized-request) :get)
-        _ (println "DEBUG: request-url:" request-url)
-        _ (println "DEBUG: query-params:" (:query-params normalized-request))
         handler (find-matching-handler normalized-request)]
     (if handler
       (let [response (create-response handler normalized-request)]
-        (println "DEBUG: response:" response)
         response)
       (if *in-isolation*
         (throw (ex-info "No matching stub found and running in isolation mode" 

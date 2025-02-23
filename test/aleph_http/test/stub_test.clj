@@ -7,80 +7,109 @@
 
 (deftest test-simple-get
   (testing "Basic GET request with string URL"
-    (let [response @(with-http-stub 
-                     {"http://example.com" 
-                      {:get (fn [_] {:status 200
-                                    :headers {"Content-Type" "text/plain"}
-                                    :body "Hello World"})}}
-                     (http/get "http://example.com"))]
-      (is (= 200 (:status response)))
-      (is (= "text/plain" (get-in response [:headers "Content-Type"])))
-      (is (= "Hello World" (bs/to-string (:body response)))))))
+    (let [p (promise)]
+      (with-http-stub 
+        {"http://example.com" 
+         {:get (fn [_] {:status 200
+                       :headers {"Content-Type" "text/plain"}
+                       :body "Hello World"})}}
+        (d/chain (http/get "http://example.com")
+                (fn [{:keys [status headers body]}]
+                  (is (= 200 status))
+                  (is (= "text/plain" (get headers "Content-Type")))
+                  (is (= "Hello World" (bs/to-string body)))
+                  (deliver p :done))))
+      @p)))
 
 (deftest test-pattern-matching
   (testing "Pattern matching for URLs"
-    (let [response @(with-http-stub 
-                     {#"http://example.com/\d+" 
-                      {:get (fn [_] {:status 200
-                                    :body "Numbered resource"})}}
-                     (http/get "http://example.com/123"))]
-      (is (= 200 (:status response)))
-      (is (= "Numbered resource" (bs/to-string (:body response)))))))
+    (let [p (promise)]
+      (with-http-stub 
+        {#"http://example.com/\d+" 
+         {:get (fn [_] {:status 200
+                       :body "Numbered resource"})}}
+        (d/chain (http/get "http://example.com/123")
+                (fn [{:keys [status body]}]
+                  (is (= 200 status))
+                  (is (= "Numbered resource" (bs/to-string body)))
+                  (deliver p :done))))
+      @p)))
 
 (deftest test-method-specific-response
   (testing "Different responses for different HTTP methods"
-    (let [response1 @(with-http-stub 
-                      {"http://example.com" 
-                       {:post (fn [_] {:status 201 :body "Created"})
-                        :get (fn [_] {:status 200 :body "OK"})}}
-                      (http/post "http://example.com"))
-          response2 @(with-http-stub 
-                      {"http://example.com" 
-                       {:post (fn [_] {:status 201 :body "Created"})
-                        :get (fn [_] {:status 200 :body "OK"})}}
-                      (http/get "http://example.com"))]
-      (is (= 201 (:status response1)))
-      (is (= "Created" (bs/to-string (:body response1))))
-      (is (= 200 (:status response2)))
-      (is (= "OK" (bs/to-string (:body response2)))))))
+    (let [p (promise)]
+      (with-http-stub 
+        {"http://example.com" 
+         {:post (fn [_] {:status 201 :body "Created"})
+          :get (fn [_] {:status 200 :body "OK"})}}
+        (d/chain
+         (d/zip
+          (http/post "http://example.com")
+          (http/get "http://example.com"))
+         (fn [[{post-status :status post-body :body}
+               {get-status :status get-body :body}]]
+           (is (= 201 post-status))
+           (is (= "Created" (bs/to-string post-body)))
+           (is (= 200 get-status))
+           (is (= "OK" (bs/to-string get-body)))
+           (deliver p :done))))
+      @p)))
 
 (deftest test-query-params
   (testing "Query params matching"
-    (let [response @(with-http-stub 
-                     {"http://example.com/api" 
-                      {:get (fn [req] 
-                             (if (= (get-in req [:query-params :q]) "test")
-                               {:status 200 :body "Found"}
-                               {:status 404 :body "Not Found"}))}}
-                     (http/get "http://example.com/api?q=test"))]
-      (is (= 200 (:status response)))
-      (is (= "Found" (bs/to-string (:body response)))))))
+    (let [p (promise)]
+      (with-http-stub 
+        {"http://example.com/api" 
+         {:get (fn [req] 
+                 (if (= (get-in req [:query-params :q]) "test")
+                   {:status 200 :body "Found"}
+                   {:status 404 :body "Not Found"}))}}
+        (d/chain (http/get "http://example.com/api?q=test")
+                (fn [{:keys [status body]}]
+                  (is (= 200 status))
+                  (is (= "Found" (bs/to-string body)))
+                  (deliver p :done))))
+      @p)))
 
 (deftest test-any-method
   (testing "Any method matching"
-    (let [response1 @(with-http-stub 
-                      {"http://example.com" 
-                       {:any (fn [_] {:status 200 :body "Any"})}}
-                      (http/get "http://example.com"))
-          response2 @(with-http-stub 
-                      {"http://example.com" 
-                       {:any (fn [_] {:status 200 :body "Any"})}}
-                      (http/post "http://example.com"))]
-      (is (= "Any" (bs/to-string (:body response1))))
-      (is (= "Any" (bs/to-string (:body response2)))))))
+    (let [p (promise)]
+      (with-http-stub 
+        {"http://example.com" 
+         {:any (fn [_] {:status 200 :body "Any"})}}
+        (d/chain
+         (d/zip
+          (http/get "http://example.com")
+          (http/post "http://example.com"))
+         (fn [[{get-body :body} {post-body :body}]]
+           (is (= "Any" (bs/to-string get-body)))
+           (is (= "Any" (bs/to-string post-body)))
+           (deliver p :done))))
+      @p)))
 
 (deftest test-http-stub-in-isolation
   (testing "throws exception for unmatched routes in isolation mode"
-    (is (thrown? clojure.lang.ExceptionInfo
-          @(with-http-stub-in-isolation
-             {"http://example.com/matched" 
-              {:get (fn [_] {:status 200 :body "OK"})}}
-             (http/get "http://example.com/unmatched")))))
+    (let [p (promise)]
+      (try
+        (with-http-stub-in-isolation
+          {"http://example.com/matched" 
+           {:get (fn [_] {:status 200 :body "OK"})}}
+          (http/get "http://example.com/unmatched"))
+        (catch clojure.lang.ExceptionInfo e
+          (is (instance? clojure.lang.ExceptionInfo e))
+          (is (= "No matching stub found and running in isolation mode"
+                 (.getMessage e)))
+          (deliver p :done)))
+      @p))
   
   (testing "matches routes correctly in isolation mode"
-    (let [response @(with-http-stub-in-isolation
-                     {"http://example.com/matched"
-                      {:get (fn [_] {:status 200 :body "OK"})}}
-                     (http/get "http://example.com/matched"))]
-      (is (= 200 (:status response)))
-      (is (= "OK" (bs/to-string (:body response)))))))
+    (let [p (promise)]
+      (with-http-stub-in-isolation
+        {"http://example.com/matched"
+         {:get (fn [_] {:status 200 :body "OK"})}}
+        (d/chain (http/get "http://example.com/matched")
+                (fn [{:keys [status body]}]
+                  (is (= 200 status))
+                  (is (= "OK" (bs/to-string body)))
+                  (deliver p :done))))
+      @p)))

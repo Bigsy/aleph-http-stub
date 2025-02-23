@@ -50,8 +50,10 @@
             (when (matches-route? route request)
               (let [handler (or (get handlers request-method)
                                (get handlers :any))
-                    times (or (get-in handlers [:times request-method])  ; Get method-specific times
-                             (:times handlers))                         ; Or global times
+                    times-map (:times handlers)
+                    times (if (map? times-map)
+                           (get times-map request-method)  ; Get method-specific times
+                           times-map)                     ; Or global times
                     route-key (str route ":" (name request-method))]
                 ;; Set up expected counts if :times is specified
                 (when times

@@ -1,4 +1,4 @@
-(defproject org.clojars.bigsy/aleph-http-stub "0.0.1"
+(defproject org.clojars.bigsy/aleph-http-stub "0.0.2"
   :repositories {"clojars" {:url "https://repo.clojars.org/"}}
   :deploy-repositories {"clojars" {:url "https://repo.clojars.org/"
                                   :sign-releases false

@@ -2,10 +2,13 @@
   (:require [aleph.http :as http]
             [manifold.deferred :as d]
             [clojure.string :as str]
-            [ring.util.codec :as ring-codec]))
+            [ring.util.codec :as ring-codec]
+            [clojure.test :refer [is]]))
 
 (def ^:dynamic *stub-routes* {})
 (def ^:dynamic *in-isolation* false)
+(def ^:dynamic *call-counts* (atom {}))
+(def ^:dynamic *expected-counts* (atom {}))
 
 (defn- normalize-query-params [params]
   (when params
@@ -41,14 +44,22 @@
       (fn? route) (route request-base-url)
       :else false)))
 
-
-
 (defn- find-matching-handler [request]
   (let [request-method (or (:request-method request) :get)]
     (some (fn [[route handlers]]
             (when (matches-route? route request)
-              (or (get handlers request-method)
-                  (get handlers :any))))
+              (let [handler (or (get handlers request-method)
+                               (get handlers :any))
+                    times (or (get-in handlers [:times request-method])  ; Get method-specific times
+                             (:times handlers))                         ; Or global times
+                    route-key (str route ":" (name request-method))]
+                ;; Set up expected counts if :times is specified
+                (when times
+                  (swap! *expected-counts* assoc route-key times))
+                ;; Update call count
+                (when handler
+                  (swap! *call-counts* update route-key (fnil inc 0)))
+                handler)))
           *stub-routes*)))
 
 (defn- create-response [handler request]
@@ -78,6 +89,14 @@
                         :method request-method}))
         (original-fn request)))))
 
+(defn verify-call-counts! []
+  (doseq [[route-key expected-count] @*expected-counts*]
+    (let [actual-count (get @*call-counts* route-key 0)]
+      (when (not= expected-count actual-count)
+        (throw (Exception.
+                (format "Expected route '%s' to be called %d times but was called %d times"
+                        route-key expected-count actual-count)))))))
+
 (defmacro with-http-stub
   "Takes a map of route/response-fn pairs and executes the body with HTTP requests stubbed.
    Routes can be:
@@ -88,10 +107,14 @@
    Response functions should take a request map and return a response map with:
    {:status 200 :headers {} :body \"response\"}"
   [routes & body]
-  `(binding [*stub-routes* ~routes]
+  `(binding [*stub-routes* ~routes
+             *call-counts* (atom {})
+             *expected-counts* (atom {})]
      (with-redefs [aleph.http/request (fn [request#] 
                                       (stub-request http/request request#))]
-       ~@body)))
+       (let [result# (do ~@body)]
+         (verify-call-counts!)
+         result#))))
 
 (defmacro with-http-stub-in-isolation
   "Like with-http-stub, but throws an exception if no matching stub is found"

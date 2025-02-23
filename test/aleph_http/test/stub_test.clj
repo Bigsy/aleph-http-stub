@@ -113,3 +113,82 @@
                   (is (= "OK" (bs/to-string body)))
                   (deliver p :done))))
       @p)))
+
+(deftest test-global-http-stub-in-isolation
+  (testing "global stub in isolation mode throws exception for unmatched routes"
+    (let [p (promise)]
+      (try
+        (with-http-stub-in-isolation
+          {"http://example.com" 
+           {:get (fn [_] {:status 200 :body "OK"})}}
+          (http/get "http://other.com"))
+        (catch clojure.lang.ExceptionInfo e
+          (is (instance? clojure.lang.ExceptionInfo e))
+          (is (= "No matching stub found and running in isolation mode"
+                 (.getMessage e)))
+          (deliver p :done)))
+      @p))
+
+  (testing "global stub in isolation mode matches routes and returns response"
+    (let [p (promise)]
+      (with-http-stub-in-isolation
+        {"http://example.com" 
+         {:get (fn [_] {:status 200 :body "success"})}}
+        (d/chain (http/get "http://example.com")
+                 (fn [{:keys [status body]}]
+                   (is (= 200 status))
+                   (is (= "success" (bs/to-string body)))
+                   (deliver p :done))))
+      @p))
+
+  (testing "global stub in isolation mode preserves dynamic bindings across multiple calls"
+    (let [p1 (promise)
+          p2 (promise)]
+      (with-http-stub-in-isolation
+        {"http://example.com" 
+         {:get (fn [_] {:status 200 :body "first"})}}
+        (d/chain (http/get "http://example.com")
+                 (fn [{:keys [body]}]
+                   (is (= "first" (bs/to-string body)))
+                   (deliver p1 :done)))
+        (try
+          (http/get "http://other.com")
+          (catch clojure.lang.ExceptionInfo e
+            (is (instance? clojure.lang.ExceptionInfo e))
+            (is (= "No matching stub found and running in isolation mode"
+                 (.getMessage e)))
+            (deliver p2 :done))))
+      [@p1 @p2])))
+
+(deftest test-global-http-stub
+  (testing "matches routes correctly with global stub"
+    (let [p (promise)]
+      (with-http-stub
+        {"http://example.com/matched" 
+         {:get (fn [_] {:status 200 :body "OK"})}}
+        (d/chain (http/get "http://example.com/matched")
+                 (fn [{:keys [status body]}]
+                   (is (= 200 status))
+                   (is (= "OK" (bs/to-string body)))
+                   (deliver p :done))))
+      @p))
+
+  (testing "preserves global stub across multiple calls"
+    (let [p1 (promise)
+          p2 (promise)]
+      (with-http-stub
+        {"http://example.com" 
+         {:get (fn [_] {:status 200 :body "First"})
+          :post (fn [_] {:status 201 :body "Second"})}}
+        (d/chain
+         (d/zip
+          (http/get "http://example.com")
+          (http/post "http://example.com"))
+         (fn [[{get-body :body} {post-body :body post-status :status}]]
+           (is (= "First" (bs/to-string get-body)))
+           (is (= 201 post-status))
+           (is (= "Second" (bs/to-string post-body)))
+           (deliver p1 :done)
+           (deliver p2 :done))))
+      [@p1 @p2])))
+

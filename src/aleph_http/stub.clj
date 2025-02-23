@@ -1,41 +1,82 @@
 (ns aleph-http.stub
   (:require [aleph.http :as http]
             [manifold.deferred :as d]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [ring.util.codec :as ring-codec]))
 
 (def ^:dynamic *stub-routes* {})
 (def ^:dynamic *in-isolation* false)
 
-(defn- matches-route? [route request-url]
-  (cond
-    (string? route) (= route request-url)
-    (instance? java.util.regex.Pattern route) (re-find route request-url)
-    (fn? route) (route request-url)
-    :else false))
+(defn- normalize-query-params [params]
+  (when params
+    (into {} (for [[k v] params]
+               [(keyword k) (str v)]))))
 
-(defn- find-stub [request]
-  (let [request-url (str (:url request))]
-    (->> *stub-routes*
-         (filter (fn [[route _]]
-                  (matches-route? route request-url)))
-         first
-         second)))
+(defn- parse-query-string [query-string]
+  (if (str/blank? query-string)
+    {}
+    (normalize-query-params (ring-codec/form-decode query-string))))
 
-(defn- create-response [response-fn request]
-  (let [response (if (fn? response-fn)
-                   (response-fn request)
-                   response-fn)]
-    (d/success-deferred response)))
+(defn- get-request-query-params [request]
+  (let [url (str (:url request))
+        [_ query-string] (str/split url #"\?" 2)]
+    (or (some-> request :query-params normalize-query-params)
+        (some-> query-string parse-query-string)
+        {})))
+
+(defn- normalize-request [request]
+  (let [query-params (get-request-query-params request)
+        [url _] (str/split (str (:url request)) #"\?" 2)]
+    (-> request
+        (assoc :query-params query-params)
+        (assoc :url url))))
+
+(defn- matches-route? [route request]
+  (let [request-url (:url request)
+        [request-base-url _] (str/split request-url #"\?" 2)]
+    (cond
+      (string? route) (let [[route-url _] (str/split route #"\?" 2)]
+                        (= route-url request-base-url))
+      (instance? java.util.regex.Pattern route) (boolean (re-find route request-base-url))
+      (fn? route) (route request-base-url)
+      :else false)))
+
+
+
+(defn- find-matching-handler [request]
+  (let [request-method (or (:request-method request) :get)]
+    (some (fn [[route handlers]]
+            (when (matches-route? route request)
+              (or (get handlers request-method)
+                  (get handlers :any))))
+          *stub-routes*)))
+
+(defn- create-response [handler request]
+  (let [response (if (fn? handler)
+                   (handler request)
+                   handler)]
+    (if (d/deferred? response)
+      response
+      (d/success-deferred response))))
 
 (defn stub-request
   "Internal function used by with-http-stub macro"
   [original-fn request]
-  (if-let [stub-fn (find-stub request)]
-    (create-response stub-fn request)
-    (if *in-isolation*
-      (throw (ex-info "No matching stub found and running in isolation mode" 
-                     {:url (:url request)}))
-      (original-fn request))))
+  (let [normalized-request (normalize-request request)
+        request-url (str (:url normalized-request))
+        request-method (or (:request-method normalized-request) :get)
+        _ (println "DEBUG: request-url:" request-url)
+        _ (println "DEBUG: query-params:" (:query-params normalized-request))
+        handler (find-matching-handler normalized-request)]
+    (if handler
+      (let [response (create-response handler normalized-request)]
+        (println "DEBUG: response:" response)
+        response)
+      (if *in-isolation*
+        (throw (ex-info "No matching stub found and running in isolation mode" 
+                       {:url request-url
+                        :method request-method}))
+        (original-fn request)))))
 
 (defmacro with-http-stub
   "Takes a map of route/response-fn pairs and executes the body with HTTP requests stubbed.

@@ -8,5 +8,6 @@
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [aleph "0.7.0"]
                  [manifold "0.4.1"]
-                 [org.clj-commons/byte-streams "0.3.4"]]
+                 [org.clj-commons/byte-streams "0.3.4"]
+                 [ring/ring-codec "1.2.0"]]
   :profiles {:dev {:dependencies [[org.clojure/clojure "1.11.1"]]}})
